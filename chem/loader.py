@@ -41,7 +41,8 @@ allowable_features = {
         Chem.rdchem.BondType.SINGLE,
         Chem.rdchem.BondType.DOUBLE,
         Chem.rdchem.BondType.TRIPLE,
-        Chem.rdchem.BondType.AROMATIC
+        Chem.rdchem.BondType.AROMATIC,
+        Chem.rdchem.BondType.DATIVE,
     ],
     'possible_bond_dirs' : [ # only for double bond stereo information
         Chem.rdchem.BondDir.NONE,
@@ -290,7 +291,7 @@ class MoleculeDataset_aug(InMemoryDataset):
         self.transform, self.pre_transform, self.pre_filter = transform, pre_transform, pre_filter
 
         if not empty:
-            self.data, self.slices = torch.load(self.processed_paths[0])
+            self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
     def get(self, idx):
         data = Data()
@@ -889,17 +890,17 @@ class MoleculeDataset(InMemoryDataset):
         self.transform, self.pre_transform, self.pre_filter = transform, pre_transform, pre_filter
 
         if not empty:
-            self.data, self.slices = torch.load(self.processed_paths[0])
+            self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
 
     def get(self, idx):
         data = Data()
-        for key in self.data.keys:
-            item, slices = self.data[key], self.slices[key]
+        for key in self._data.keys():
+            item, slices = self._data[key], self.slices[key]
             s = list(repeat(slice(None), item.dim()))
-            s[data.cat_dim(key, item)] = slice(slices[idx],
+            s[data.__cat_dim__(key, item)] = slice(slices[idx],
                                                     slices[idx + 1])
-            data[key] = item[s]
+            data[key] = item[tuple(s)]
         return data
 
 
@@ -1748,7 +1749,7 @@ def _load_sider_dataset(input_path):
     labels = labels.replace(0, -1)
     assert len(smiles_list) == len(rdkit_mol_objs_list)
     assert len(smiles_list) == len(labels)
-    return smiles_list, rdkit_mol_objs_list, labels.value
+    return smiles_list, rdkit_mol_objs_list, labels.values
 
 def _load_toxcast_dataset(input_path):
     """

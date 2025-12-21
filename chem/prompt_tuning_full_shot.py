@@ -1,7 +1,7 @@
 import argparse
 
 from loader import MoleculeDataset
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 
 import torch
 import torch.nn as nn
@@ -145,26 +145,33 @@ def main():
         raise ValueError("Invalid dataset name.")
 
     #set up dataset
-    dataset = MoleculeDataset("dataset/" + args.dataset, dataset=args.dataset)
 
-    print(dataset)
+    def load_dataset():
+        dataset = MoleculeDataset("dataset/" + args.dataset, dataset=args.dataset)
+        print(dataset)
+        if args.split == "scaffold":
+            smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
+            train_dataset, valid_dataset, test_dataset = scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1)
+            print("scaffold")
+        elif args.split == "random":
+            train_dataset, valid_dataset, test_dataset = random_split(dataset, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
+            print("random")
+        elif args.split == "random_scaffold":
+            smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
+            train_dataset, valid_dataset, test_dataset = random_scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
+            print("random scaffold")
+        else:
+            raise ValueError("Invalid split option.")
+        print(train_dataset[0])
+        return train_dataset, valid_dataset, test_dataset
 
- 
-    if args.split == "scaffold":
-        smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
-        train_dataset, valid_dataset, test_dataset = scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1)
-        print("scaffold")
-    elif args.split == "random":
-        train_dataset, valid_dataset, test_dataset = random_split(dataset, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
-        print("random")
-    elif args.split == "random_scaffold":
-        smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
-        train_dataset, valid_dataset, test_dataset = random_scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
-        print("random scaffold")
-    else:
-        raise ValueError("Invalid split option.")
-
-    print(train_dataset[0])
+    try:
+        train_dataset, valid_dataset, test_dataset = load_dataset()
+    except RuntimeError:
+        print("Try to remove the `processed` directory and try again.")
+        if os.path.exists("dataset/" + args.dataset + "/processed"):
+            shutil.rmtree("dataset/" + args.dataset + "/processed")
+        train_dataset, valid_dataset, test_dataset = load_dataset()
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
@@ -218,7 +225,7 @@ def main():
         print("")
 
     with open('result.log', 'a+') as f:
-        f.write(args.dataset + ' ' + str(args.runseed) + ' ' + str(np.array(test_acc_list)[-1]))
+        f.write(os.path.basename(args.model_file).split('.')[0] + ' ' + args.tuning_type + ' ' + args.dataset + ' ' + str(args.runseed) + ' ' + str(np.array(test_acc_list)[-1]))
         f.write('\n')
 
 if __name__ == "__main__":
