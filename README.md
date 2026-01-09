@@ -1,5 +1,7 @@
 # GNN 2025 Group Work
 
+Please refer to `report.md` for our report in Chinese.
+
 ## Installation
 
 We have upgraded most packages to newer versions for better compatibility with recent GPU drivers. The installed versions are listed below (also available in [`requirements.txt`](requirements.txt)):
@@ -15,6 +17,13 @@ torch_scatter==2.1.2
 rdkit==2023.9.1
 ```
 
+Since we upgrades `torch-geometric`, you may need to remove the preprocessed files after downloading the datasets (following the instructions of the original repo to download the datasets).
+
+## Experiment scripts
+
+We conduct our experiments on `chem` benchmarks.
+- The script for reproducing is `chem/run_gpf_reproduce.sh`, which is almost the same with the script `chem/run.sh` provided by the original repo, except correcting some argument names.
+- The script for testing our improved method is `chem/run_gpf_multi.sh`, which includes all the parameters used in our experiments.
 
 > # GPF
 > This is a Pytorch code Implementation of the paper [*Universal Prompt Tuning for Graph Neural Networks*](https://arxiv.org/abs/2209.15240), which is accepted by the NeurIPS 2023. We provide two graph prompt methods **GPF** and **GPF-plus** to perform prompt tuning during the downstream adaptations.
