@@ -19,30 +19,32 @@ import pandas as pd
 import graph_prompt as Prompt
 import os
 import shutil
+import random
 
 
 criterion = nn.BCEWithLogitsLoss(reduction = "none")
 
 def train(args, model, device, loader, optimizer, prompt):
     model.train()
+    all_losses = []
 
     for step, batch in enumerate(tqdm(loader, desc="Iteration")):
         batch = batch.to(device)
-        pred = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch, prompt)
+        # 传入 prompt_type 参数
+        pred = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch, prompt, args.tuning_type)
         y = batch.y.view(pred.shape).to(torch.float64)
 
-        #Whether y is non-null or not.
         is_valid = y**2 > 0
-        #Loss matrix
         loss_mat = criterion(pred.double(), (y+1)/2)
-        #loss matrix after removing null target
         loss_mat = torch.where(is_valid, loss_mat, torch.zeros(loss_mat.shape).to(loss_mat.device).to(loss_mat.dtype))
             
         optimizer.zero_grad()
         loss = torch.sum(loss_mat)/torch.sum(is_valid)
         loss.backward()
+        all_losses.append(loss.item())
 
         optimizer.step()
+    return np.mean(all_losses)
 
 
 def eval(args, model, device, loader, prompt):
@@ -54,7 +56,8 @@ def eval(args, model, device, loader, prompt):
         batch = batch.to(device)
 
         with torch.no_grad():
-            pred = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch, prompt)
+            # 传入 prompt_type 参数
+            pred = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch, prompt, args.tuning_type)
 
         y_true.append(batch.y.view(pred.shape))
         y_scores.append(pred)
@@ -64,7 +67,6 @@ def eval(args, model, device, loader, prompt):
 
     roc_list = []
     for i in range(y_true.shape[1]):
-        #AUC is only defined when there is at least one positive data.
         if np.sum(y_true[:,i] == 1) > 0 and np.sum(y_true[:,i] == -1) > 0:
             is_valid = y_true[:,i]**2 > 0
             roc_list.append(roc_auc_score((y_true[is_valid,i] + 1)/2, y_scores[is_valid,i]))
@@ -73,56 +75,83 @@ def eval(args, model, device, loader, prompt):
         print("Some target is missing!")
         print("Missing ratio: %f" %(1 - float(len(roc_list))/y_true.shape[1]))
 
-    return sum(roc_list)/len(roc_list) #y_true.shape[1]
+    return sum(roc_list)/len(roc_list)
 
+
+def plot_curves(val_acc_list, test_acc_list, train_loss_list, output_file):
+    import matplotlib.pyplot as plt
+
+    epochs = range(1, len(val_acc_list) + 1)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 10))
+    axes[0].plot(epochs, val_acc_list, label='Validation Accuracy')
+    axes[0].plot(epochs, test_acc_list, label='Test Accuracy')
+    axes[0].set_xlabel('Epochs')
+    axes[0].set_ylabel('Accuracy')
+    axes[0].set_title('Accuracy Curve')
+    axes[0].legend()
+    
+    axes[1].plot(epochs, train_loss_list, label='Train Loss')
+    axes[1].set_xlabel('Epochs')
+    axes[1].set_ylabel('Loss')
+    axes[1].set_title('Loss Curve')
+    axes[1].legend()
+
+    plt.savefig(output_file)
+    plt.close()
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def main():
-    # Training settings
     parser = argparse.ArgumentParser(description='PyTorch implementation of pre-training of graph neural networks')
-    parser.add_argument('--device', type=int, default=0,
-                        help='Which gpu to use if any (default: 0)')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Input batch size for training (default: 32)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs to train (default: 100)')
-    parser.add_argument('--lr', type=float, default=0.001,
-                        help='Learning rate (default: 0.001)')
-    parser.add_argument('--lr_scale', type=float, default=1,
-                        help='Relative learning rate for the feature extraction layer (default: 1)')
-    parser.add_argument('--decay', type=float, default=0,
-                        help='Weight decay (default: 0)')
-    parser.add_argument('--num_layer', type=int, default=5,
-                        help='Number of GNN message passing layers (default: 5).')
-    parser.add_argument('--emb_dim', type=int, default=300,
-                        help='Embedding dimensions (default: 300)')
-    parser.add_argument('--dropout_ratio', type=float, default=0.5,
-                        help='Dropout ratio (default: 0.5)')
-    parser.add_argument('--graph_pooling', type=str, default="mean",
-                        help='Graph level pooling (sum, mean, max, set2set, attention)')
-    parser.add_argument('--JK', type=str, default="last",
-                        help='How the node features across layers are combined. last, sum, max or concat')
+    parser.add_argument('--device', type=int, default=0)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--lr_scale', type=float, default=1)
+    parser.add_argument('--use_cosine', action='store_true', help='Whether to use cosine annealing scheduler.')
+    parser.add_argument('--decay', type=float, default=0)
+    parser.add_argument('--num_layer', type=int, default=5)
+    parser.add_argument('--emb_dim', type=int, default=300)
+    parser.add_argument('--dropout_ratio', type=float, default=0.5)
+    parser.add_argument('--graph_pooling', type=str, default="mean")
+    parser.add_argument('--JK', type=str, default="last")
     parser.add_argument('--gnn_type', type=str, default="gin")
-    parser.add_argument('--tuning_type', type=str, default="gpf", help='\'gpf\' for GPF and \'gpf-plus\' for GPF-plus in the paper')
-    parser.add_argument('--dataset', type=str, default = 'tox21', help='Root directory of dataset. For now, only classification.')
-    parser.add_argument('--model_file', type=str, default = '', help='File path to read the model (if there is any)')
-    parser.add_argument('--seed', type=int, default=42, help = "Seed for splitting the dataset.")
-    parser.add_argument('--runseed', type=int, default=0, help = "Seed for minibatch selection, random initialization.")
-    parser.add_argument('--split', type = str, default="scaffold", help = "The way of dataset split(e.g., \'scaffold\' for chem data)")
-    parser.add_argument('--eval_train', type=int, default = 0, help='Evaluating training or not')
-    parser.add_argument('--num_layers', type=int, default = 1, help='A range of [1,2,3]-layer MLPs with equal width')
-    parser.add_argument('--pnum', type=int, default = 5, help='The number of independent basis for GPF-plus')
-    parser.add_argument('--num_workers', type=int, default = 4, help='Number of workers for dataset loading')
+    # 修改：添加新的 tuning_type 选项
+    parser.add_argument('--tuning_type', type=str, default="gpf", 
+                        choices=['gpf', 'gpf-plus', 'gpf_multi', 'gpf_multi_shared'],
+                        help='gpf: 原始GPF, gpf-plus: GPF-plus, gpf_multi: 每层不同prompt, gpf_multi_shared: 每层相同prompt')
+    parser.add_argument('--dataset', type=str, default='tox21')
+    parser.add_argument('--model_file', type=str, default='')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--runseed', type=int, default=0)
+    parser.add_argument('--split', type=str, default="scaffold")
+    parser.add_argument('--eval_train', type=int, default=0)
+    parser.add_argument('--num_layers', type=int, default=1)
+    parser.add_argument('--pnum', type=int, default=5)
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--output_file', type=str, default="result.log")
+    parser.add_argument('--plot_curves', action='store_true', help='Whether to plot training curves')
     args = parser.parse_args()
 
-
+    os.environ["PYTHONHASHSEED"] = str(args.runseed)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.enabled = False
     torch.manual_seed(args.runseed)
     np.random.seed(args.runseed)
+    random.seed(args.runseed)
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.runseed)
 
-    #Bunch of classification tasks
+    # 数据集任务数
     if args.dataset == "tox21":
         num_tasks = 12
     elif args.dataset == "hiv":
@@ -144,21 +173,20 @@ def main():
     else:
         raise ValueError("Invalid dataset name.")
 
-    #set up dataset
-
+    # 加载数据集
     def load_dataset():
         dataset = MoleculeDataset("dataset/" + args.dataset, dataset=args.dataset)
         print(dataset)
         if args.split == "scaffold":
             smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
-            train_dataset, valid_dataset, test_dataset = scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1)
+            train_dataset, valid_dataset, test_dataset = scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8, frac_valid=0.1, frac_test=0.1)
             print("scaffold")
         elif args.split == "random":
-            train_dataset, valid_dataset, test_dataset = random_split(dataset, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
+            train_dataset, valid_dataset, test_dataset = random_split(dataset, null_value=0, frac_train=0.8, frac_valid=0.1, frac_test=0.1, seed=args.seed)
             print("random")
         elif args.split == "random_scaffold":
             smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
-            train_dataset, valid_dataset, test_dataset = random_scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
+            train_dataset, valid_dataset, test_dataset = random_scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8, frac_valid=0.1, frac_test=0.1, seed=args.seed)
             print("random scaffold")
         else:
             raise ValueError("Invalid split option.")
@@ -173,40 +201,59 @@ def main():
             shutil.rmtree("dataset/" + args.dataset + "/processed")
         train_dataset, valid_dataset, test_dataset = load_dataset()
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers)
-    val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
+    tgenerator = torch.Generator()
+    tgenerator.manual_seed(args.runseed)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, worker_init_fn=seed_worker, generator=tgenerator)
+    val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    #set up model
-    model = GNN_graphpred(args.num_layer, args.emb_dim, num_tasks, JK = args.JK, drop_ratio = args.dropout_ratio, graph_pooling = args.graph_pooling, gnn_type = args.gnn_type, head_layer = args.num_layers)
+    # 设置模型
+    model = GNN_graphpred(args.num_layer, args.emb_dim, num_tasks, JK=args.JK, drop_ratio=args.dropout_ratio, graph_pooling=args.graph_pooling, gnn_type=args.gnn_type, head_layer=args.num_layers)
     if not args.model_file == "":
         model.from_pretrained(args.model_file)
     print(model)
     model.to(device)
 
+    # === 根据 tuning_type 创建不同的 prompt ===
     if args.tuning_type == 'gpf':
+        print("Using GPF (input layer only)")
         prompt = Prompt.SimplePrompt(args.emb_dim).to(device)
     elif args.tuning_type == 'gpf-plus':
+        print("Using GPF-plus (input layer with attention)")
         prompt = Prompt.GPFplusAtt(args.emb_dim, args.pnum).to(device)
+    elif args.tuning_type == 'gpf_multi':
+        print("Using GPF Multi-Layer (different prompt per layer)")
+        prompt = Prompt.GPFMultiLayer(args.num_layer, args.emb_dim).to(device)
+    elif args.tuning_type == 'gpf_multi_shared':
+        print("Using GPF Multi-Layer Shared (same prompt per layer)")
+        prompt = Prompt.GPFMultiLayerShared(args.num_layer, args.emb_dim).to(device)
 
-    #set up optimizer
-    #different learning rate for different part of GNN
+    # 设置优化器
     model_param_group = []
     model_param_group.append({"params": prompt.parameters()})
     if args.graph_pooling == "attention":
-        model_param_group.append({"params": model.pool.parameters(), "lr":args.lr*args.lr_scale})
-    model_param_group.append({"params": model.graph_pred_linear.parameters(), "lr":args.lr*args.lr_scale})
+        model_param_group.append({"params": model.pool.parameters(), "lr": args.lr * args.lr_scale})
+    model_param_group.append({"params": model.graph_pred_linear.parameters(), "lr": args.lr * args.lr_scale})
     optimizer = optim.Adam(model_param_group, lr=args.lr, weight_decay=args.decay, amsgrad=False)
     print(optimizer)
+    if args.use_cosine:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    else:
+        scheduler = None
 
     train_acc_list = []
     val_acc_list = []
     test_acc_list = []
+    train_loss_list = []
 
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(1, args.epochs + 1):
         print("====epoch " + str(epoch), " lr: ", optimizer.param_groups[-1]['lr'])
         
-        train(args, model, device, train_loader, optimizer, prompt)
+        train_loss = train(args, model, device, train_loader, optimizer, prompt)
+        train_loss_list.append(train_loss)
+
+        if scheduler is not None:
+            scheduler.step()
 
         print("====Evaluation")
         if args.eval_train:
@@ -217,16 +264,27 @@ def main():
         val_acc = eval(args, model, device, val_loader, prompt)
         test_acc = eval(args, model, device, test_loader, prompt)
 
-        print("train: %f val: %f test: %f" %(train_acc, val_acc, test_acc))
+        if args.tuning_type == "gpf_multi":
+            with torch.no_grad():
+                print(f"train: {train_acc}; val: {val_acc}; test: {test_acc}; loss: {train_loss:.3f}; norm: {[torch.norm(p.data).item() for p in prompt.prompts]}")
+        else:
+            print("train: %f val: %f test: %f loss: %.3f" % (train_acc, val_acc, test_acc, train_loss))
 
         val_acc_list.append(val_acc)
         test_acc_list.append(test_acc)
         train_acc_list.append(train_acc)
         print("")
+    
+    if args.plot_curves:
+        base_dir = os.path.dirname(args.output_file)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_curves(val_acc_list, test_acc_list, train_loss_list, os.path.join(base_dir, f"{args.gnn_type}_{args.tuning_type}_{args.dataset}_{timestamp}.png"))
 
-    with open('result.log', 'a+') as f:
+    with open(args.output_file, 'a+') as f:
         f.write(os.path.basename(args.model_file).split('.')[0] + ' ' + args.tuning_type + ' ' + args.dataset + ' ' + str(args.runseed) + ' ' + str(np.array(test_acc_list)[-1]))
         f.write('\n')
+
 
 if __name__ == "__main__":
     main()

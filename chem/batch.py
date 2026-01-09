@@ -18,7 +18,8 @@ class BatchMasking(Data):
         r"""Constructs a batch object from a python list holding
         :class:`torch_geometric.data.Data` objects.
         The assignment vector :obj:`batch` is created on the fly."""
-        keys = [set(data.keys) for data in data_list]
+        # keys = [set(data.keys) for data in data_list]
+        keys = [set(data.keys()) for data in data_list]
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
@@ -34,7 +35,8 @@ class BatchMasking(Data):
         for i, data in enumerate(data_list):
             num_nodes = data.num_nodes
             batch.batch.append(torch.full((num_nodes, ), i, dtype=torch.long))
-            for key in data.keys:
+            # for key in data.keys:
+            for key in data.keys():
                 item = data[key]
                 if key in ['edge_index', 'masked_atom_indices']:
                     item = item + cumsum_node
@@ -46,8 +48,10 @@ class BatchMasking(Data):
             cumsum_edge += data.edge_index.shape[1]
 
         for key in keys:
+            # batch[key] = torch.cat(
+            #     batch[key], dim=data_list[0].cat_dim(key, batch[key][0]))
             batch[key] = torch.cat(
-                batch[key], dim=data_list[0].cat_dim(key, batch[key][0]))
+                batch[key], dim=data_list[0].__cat_dim__(key, batch[key][0]))
         batch.batch = torch.cat(batch.batch, dim=-1)
         return batch.contiguous()
 
@@ -83,7 +87,8 @@ class BatchAE(Data):
         r"""Constructs a batch object from a python list holding
         :class:`torch_geometric.data.Data` objects.
         The assignment vector :obj:`batch` is created on the fly."""
-        keys = [set(data.keys) for data in data_list]
+        # keys = [set(data.keys) for data in data_list]
+        keys = [set(data.keys()) for data in data_list]
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
@@ -98,7 +103,8 @@ class BatchAE(Data):
         for i, data in enumerate(data_list):
             num_nodes = data.num_nodes
             batch.batch.append(torch.full((num_nodes, ), i, dtype=torch.long))
-            for key in data.keys:
+            # for key in data.keys:
+            for key in data.keys():
                 item = data[key]
                 if key in ['edge_index', 'negative_edge_index']:
                     item = item + cumsum_node
@@ -107,8 +113,10 @@ class BatchAE(Data):
             cumsum_node += num_nodes
 
         for key in keys:
+            # batch[key] = torch.cat(
+            #     batch[key], dim=batch.cat_dim(key))
             batch[key] = torch.cat(
-                batch[key], dim=batch.cat_dim(key))
+                batch[key], dim=batch.__cat_dim__(key, batch[key][0]))
         batch.batch = torch.cat(batch.batch, dim=-1)
         return batch.contiguous()
 
@@ -201,15 +209,19 @@ class BatchSubstructContext(Data):
                 i += 1
 
         for key in keys:
+            # batch[key] = torch.cat(
+            #     batch[key], dim=batch.cat_dim(key))
             batch[key] = torch.cat(
-                batch[key], dim=batch.cat_dim(key))
+                batch[key], dim=batch.__cat_dim__(key, batch[key][0]))
         #batch.batch = torch.cat(batch.batch, dim=-1)
         batch.batch_overlapped_context = torch.cat(batch.batch_overlapped_context, dim=-1)
         batch.overlapped_context_size = torch.LongTensor(batch.overlapped_context_size)
 
         return batch.contiguous()
 
-    def cat_dim(self, key):
+    # def cat_dim(self, key):
+    #     return -1 if key in ["edge_index", "edge_index_substruct", "edge_index_context"] else 0
+    def __cat_dim__(self, key, value, *args, **kwargs):
         return -1 if key in ["edge_index", "edge_index_substruct", "edge_index_context"] else 0
 
     def cumsum(self, key, item):

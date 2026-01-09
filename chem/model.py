@@ -203,11 +203,9 @@ class GraphSAGEConv(MessagePassing):
     def update(self, aggr_out):
         return F.normalize(aggr_out, p=2, dim=-1)
 
-
+# add
 class GNN(torch.nn.Module):
     """
-    
-
     Args:
         num_layer (int): the number of GNN layers
         emb_dim (int): dimensionality of embeddings
@@ -218,7 +216,6 @@ class GNN(torch.nn.Module):
 
     Output:
         node representations
-
     """
 
     def __init__(self, num_layer, emb_dim, JK="last", drop_ratio=0, gnn_type="gin"):
@@ -226,6 +223,7 @@ class GNN(torch.nn.Module):
         self.num_layer = num_layer
         self.drop_ratio = drop_ratio
         self.JK = JK
+        self.emb_dim = emb_dim  # 新增：保存维度用于多层prompt
 
         if self.num_layer < 2:
             raise ValueError("Number of GNN layers must be greater than 1.")
@@ -253,30 +251,43 @@ class GNN(torch.nn.Module):
         for layer in range(num_layer):
             self.batch_norms.append(torch.nn.BatchNorm1d(emb_dim))
 
-    # def forward(self, x, edge_index, edge_attr):
     def forward(self, *argv):
-        if len(argv) == 4:
+        if len(argv) == 5:
+            # 新增：支持多层 prompt
+            x, edge_index, edge_attr, prompt, prompt_type = argv[0], argv[1], argv[2], argv[3], argv[4]
+        elif len(argv) == 4:
             x, edge_index, edge_attr, prompt = argv[0], argv[1], argv[2], argv[3]
+            prompt_type = 'gpf'  # 默认是原始 gpf
         elif len(argv) == 3:
             x, edge_index, edge_attr = argv[0], argv[1], argv[2]
+            prompt = None
+            prompt_type = None
         elif len(argv) == 1:
             data = argv[0]
             x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+            prompt = None
+            prompt_type = None
         else:
             raise ValueError("unmatched number of arguments.")
 
         x = self.x_embedding1(x[:, 0]) + self.x_embedding2(x[:, 1])
-        if len(argv) == 4:
-            if prompt is not None:
-                x = prompt.add(x)
+        
+        # 原始 GPF：只在输入层加 prompt
+        if prompt is not None and prompt_type in ['gpf', 'gpf-plus']:
+            x = prompt.add(x)
 
         h_list = [x]
         for layer in range(self.num_layer):
-            h = self.gnns[layer](h_list[layer], edge_index, edge_attr)
+            h_input = h_list[layer]
+            
+            # === 新增：多层 prompt 在每层 GNN 之前注入 ===
+            if prompt is not None and prompt_type in ['gpf_multi', 'gpf_multi_shared']:
+                h_input = prompt.add(h_input, layer)
+            
+            h = self.gnns[layer](h_input, edge_index, edge_attr)
             h = self.batch_norms[layer](h)
-            # h = F.dropout(F.relu(h), self.drop_ratio, training = self.training)
+            
             if layer == self.num_layer - 1:
-                # remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training=self.training)
             else:
                 h = F.dropout(F.relu(h), self.drop_ratio, training=self.training)
@@ -295,6 +306,7 @@ class GNN(torch.nn.Module):
             node_representation = torch.sum(torch.cat(h_list, dim=0), dim=0)[0]
 
         return node_representation
+
 
 
 class GNN_graphpred(torch.nn.Module):
@@ -379,19 +391,27 @@ class GNN_graphpred(torch.nn.Module):
         # self.gnn = GNN(self.num_layer, self.emb_dim, JK = self.JK, drop_ratio = self.drop_ratio)
         self.gnn.load_state_dict(torch.load(model_file, map_location='cpu'))
 
+    # add
     def forward(self, *argv):
-        if len(argv) == 5:
+        if len(argv) == 6:
+            x, edge_index, edge_attr, batch, prompt, prompt_type = argv[0], argv[1], argv[2], argv[3], argv[4], argv[5]
+        elif len(argv) == 5:
             x, edge_index, edge_attr, batch, prompt = argv[0], argv[1], argv[2], argv[3], argv[4]
+            prompt_type = 'gpf'  # 默认
         elif len(argv) == 4:
             x, edge_index, edge_attr, batch = argv[0], argv[1], argv[2], argv[3]
+            prompt = None
+            prompt_type = None
         elif len(argv) == 1:
             data = argv[0]
             x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
+            prompt = None
+            prompt_type = None
         else:
             raise ValueError("unmatched number of arguments.")
 
-        if len(argv) == 5:
-            node_representation = self.gnn(x, edge_index, edge_attr, prompt)
+        if prompt is not None:
+            node_representation = self.gnn(x, edge_index, edge_attr, prompt, prompt_type)
         else:
             node_representation = self.gnn(x, edge_index, edge_attr)
 
@@ -400,9 +420,8 @@ class GNN_graphpred(torch.nn.Module):
         if self.final_linear:
             for i in range(len(self.graph_pred_linear)):
                 emb = self.graph_pred_linear[i](emb)
-
-        # return self.graph_pred_linear(self.pool(node_representation, batch))
         return emb
+
 
 
 if __name__ == "__main__":

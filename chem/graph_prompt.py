@@ -38,3 +38,42 @@ class GPFplusAtt(nn.Module):
         p = weight.mm(self.p_list)
 
         return x + p
+    
+
+class GPFMultiLayer(nn.Module):
+    """每层GNN使用不同的prompt"""
+    def __init__(self, num_layers: int, in_channels: int):
+        super(GPFMultiLayer, self).__init__()
+        self.num_layers = num_layers
+        
+        # 每层一个独立可学习的 prompt
+        self.prompts = nn.ParameterList([
+            nn.Parameter(torch.Tensor(1, in_channels))
+            for _ in range(num_layers)
+        ])
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        for prompt in self.prompts:
+            glorot(prompt)
+    
+    def add(self, x: Tensor, layer_idx: int):
+        """在第 layer_idx 层添加对应的 prompt"""
+        return x + self.prompts[layer_idx]
+
+# add
+class GPFMultiLayerShared(nn.Module):
+    """每层GNN使用相同的prompt（消融实验用）"""
+    def __init__(self, num_layers: int, in_channels: int):
+        super(GPFMultiLayerShared, self).__init__()
+        self.num_layers = num_layers
+        self.shared_prompt = nn.Parameter(torch.Tensor(1, in_channels))
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        glorot(self.shared_prompt)
+    
+    def add(self, x: Tensor, layer_idx: int):
+        """所有层使用同一个 prompt"""
+        return x + self.shared_prompt
+
