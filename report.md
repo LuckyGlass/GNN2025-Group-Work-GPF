@@ -93,9 +93,9 @@ EdgePrompt (ICLR 2025) 提出了一种基于边的图提示微调方法。不同
 *   **训练配置：** 200 epochs，学习率 0.001，5 次随机种子取平均。
 
 原论文中只有加法这一种注入方式，我们额外实现了乘法和仿射这两种方式，对比了三种不同的提示注入方式（$x_j$ 为邻居节点特征，`edge_attr` 为学习到的边提示）：
-1.  **Add (加法):** $\text{msg} = x_j + \text{edge\_attr}$。类似于残差连接，直接叠加特征。
-2.  **Mul (乘法):** $\text{msg} = x_j \times (1 + \text{edge\_attr})$。将提示视为门控信号或缩放因子。
-3.  **Affine (仿射):** $\text{msg} = \alpha \cdot x_j + \text{edge\_attr}$。引入可学习权重 $\alpha$。
+1.  **Add (加法):** $\text{msg}=x_j+\mathrm{edge\_attr}$。类似于残差连接，直接叠加特征。
+2.  **Mul (乘法):** $\text{msg}=x_j\times (1 + \mathrm{edge\_attr})$。将提示视为门控信号或缩放因子。
+3.  **Affine (仿射):** $\text{msg} = \alpha \cdot x_j + \mathrm{edge\_attr}$。引入可学习权重 $\alpha$。
 
 ### 3.4实验结果 
 
@@ -180,3 +180,4 @@ EdgePrompt+ 在所有数据集上均优于基础版 EdgePrompt。
 | EdgePrompt+ | add      | **60.41**  | 6.16       |
 | EdgePrompt+ | affine   | 60.07      | 6.35       |
 | EdgePrompt+ | mul      | 54.23      | 5.48       |
+
